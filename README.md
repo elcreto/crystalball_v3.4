@@ -1,15 +1,14 @@
-# Crystal Ball v3.4 — EID Streamlit App
 
-**Name fixed to correct format**: `crystalball_v34_eid_streamlit_app.py`
+# Crystal Ball v3.4 — EID (Fixed)
 
-Implements v3.4 rules:
-- Trend alignment (EMA20>EMA50 & price>EMA20)
-- Volume ≥ 1.5× 20-day avg
-- Risk/Reward ≥ 2 (stop near EMA50; basic target = 2R)
-- Optional Catalyst flag (stubbed for future integration)
+Fixes:
+- yfinance `auto_adjust=False` (silence warning)
+- sequential requests (`threads=False`) + retry/backoff to reduce rate limits
+- `.item()` for pandas scalars (deprecation-safe)
+- CSV/Excel export + sidebar controls
 
 ## Run
 ```bash
 pip install -r requirements.txt
-streamlit run crystalball_v34_eid_streamlit_app.py
+streamlit run streamlit_app.py
 ```
