@@ -4,10 +4,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-APP_NAME = "🔮 Crystal Ball v3.4 — MACD/MACD‑V + Agreement Overlay"
+APP_NAME = "🔮 Crystal Ball v3.4 — MACD‑V Only (Strict TA)"
 st.set_page_config(page_title=APP_NAME, layout="wide")
 st.title(APP_NAME)
-st.caption("Strict TA (Trend, Volume, R/R) + MACD agreement overlay for ranking. Pass/Fail still decided by strict rules.")
+st.caption("Strict pass/fail on Trend, Volume, R/R. MACD‑V shown for context.")
 
 DEFAULT_TICKERS = "MSFT,ETN,MDT,IONQ,MU,META,ONTO,NBIS,INTC"
 
@@ -20,14 +20,6 @@ with st.sidebar:
     max_retries = st.slider("Max retries per ticker", 0, 5, 3)
 
 tickers = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
-
-def macd_classic(series: pd.Series, fast=12, slow=26, signal=9):
-    ema_fast = series.ewm(span=fast, adjust=False).mean()
-    ema_slow = series.ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    hist = macd_line - signal_line
-    return macd_line, signal_line, hist
 
 def vwema(price: pd.Series, volume: pd.Series, span: int) -> pd.Series:
     vp = (price * volume).ewm(span=span, adjust=False).mean()
@@ -87,24 +79,21 @@ for t in tickers:
         c_last = to_float(close.iloc[-1]); e20 = to_float(ema20.iloc[-1]); e50 = to_float(ema50.iloc[-1])
         avg_vol = vol.rolling(20).mean(); v_last = to_float(vol.iloc[-1]); v_avg = to_float(avg_vol.iloc[-1])
 
-        vol_ok = (not np.isnan(v_avg)) and (v_avg > 0) and (v_last >= vol_mult * v_avg)
         trend_ok = (not np.isnan(e20) and not np.isnan(e50) and not np.isnan(c_last)) and (e20 > e50) and (c_last > e20)
+        vol_ok   = (not np.isnan(v_avg)) and (v_avg > 0) and (v_last >= vol_mult * v_avg)
 
-        # MACD agreement overlay (both classic and V)
-        macd_line_c, sig_line_c, hist_c = macd_classic(close)
-        macd_line_v, sig_line_v, hist_v = macd_v(close, vol)
-        h_macd, h_macdv = to_float(hist_c.iloc[-1]), to_float(hist_v.iloc[-1])
-        macd_agree = (h_macd > 0 and h_macdv > 0) or (h_macd < 0 and h_macdv < 0)
-        macd_diverge = (h_macd * h_macdv < 0)
-        macd_overlay = 1 if (macd_agree and h_macd > 0) else (-1 if macd_diverge else 0)
-        macd_note = "✅ Bullish aligned" if (macd_agree and h_macd > 0) else ("❌ Bearish aligned" if (macd_agree and h_macd < 0) else ("⚠️ Divergent" if macd_diverge else "Neutral"))
+        # MACD‑V context
+        _, _, hist_v = macd_v(close, vol)
+        h_last = to_float(hist_v.iloc[-1])
+        macdv_note = "Bullish" if h_last > 0 else ("Bearish" if h_last < 0 else "Flat")
 
+        # R/R strict (stop=EMA50)
         entry = c_last; stop = e50
         if (not np.isfinite(stop)) or (stop <= 0) or (not np.isfinite(entry)) or (entry <= stop):
             rr_ok = False; target = None; rr = None
         else:
             risk_dist = entry - stop
-            target = entry + 2.0 * risk_dist  # rr_min handled by UI; default 2.0 if not passed here
+            target = entry + rr_min * risk_dist
             rr = (target - entry) / risk_dist if risk_dist else float("nan")
             rr_ok = np.isfinite(rr) and (rr >= rr_min)
 
@@ -121,22 +110,20 @@ for t in tickers:
             "VolOK": bool(vol_ok),
             "RROK": bool(rr_ok),
             "Score (0-3)": score,
-            "Overlay (+1/0/-1)": macd_overlay,
-            "Adj Rank": score + macd_overlay,
-            "MACD Note": macd_note,
             "Status": status,
+            "MACD‑V": macdv_note
         })
     except Exception as e:
         failures.append((t, str(e)))
 
 st.subheader("Results")
 if rows:
-    df = pd.DataFrame(rows).sort_values(by=["Score (0-3)", "Overlay (+1/0/-1)", "R/R"], ascending=[False, False, False])
+    df = pd.DataFrame(rows).sort_values(by=["Score (0-3)", "R/R"], ascending=[False, False])
     st.dataframe(df, use_container_width=True)
     csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Download CSV", data=csv, file_name="crystalball_v34_overlay_results.csv", mime="text/csv")
+    st.download_button("⬇️ Download CSV", data=csv, file_name="crystalball_v34_macdv_only_results.csv", mime="text/csv")
 else:
-    st.warning("No valid candidates with current criteria. Adjust tickers or thresholds.")
+    st.warning("No valid candidates with current criteria. Try different tickers or thresholds.")
 
 if failures:
     with st.expander("Download warnings/errors"):
