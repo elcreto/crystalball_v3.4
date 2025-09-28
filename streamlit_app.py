@@ -4,10 +4,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-APP_NAME = "🔮 Crystal Ball v3.4 — MACD / MACD‑V (Fixed Scalars)"
+APP_NAME = "🔮 Crystal Ball v3.4 — MACD / MACD‑V (Fixed + Auto‑Sorted)"
 st.set_page_config(page_title=APP_NAME, layout="wide")
 st.title(APP_NAME)
-st.caption("Strict TA filter with MACD/MACD‑V toggle. FIX: explicit scalar casts, NaN guards, no ambiguous Series booleans.")
+st.caption("Strict TA filter with MACD/MACD‑V toggle. FIX: scalar casts + NaN guards + automatic sorting (Score ↓, Status, R/R ↓).")
 
 DEFAULT_TICKERS = "MSFT,ETN,MDT,IONQ,MU,META,ONTO,NBIS,INTC"
 
@@ -67,7 +67,6 @@ def fetch(ticker: str, retries: int = 3, sleep: float = 0.6):
 
 def to_float(x):
     try:
-        # handle pandas Series / numpy scalars
         if hasattr(x, "item"):
             return float(x.item())
         return float(x)
@@ -150,8 +149,15 @@ for t in tickers:
 
 st.subheader("Results")
 if rows:
-    df = pd.DataFrame(rows).sort_values(["Status","Score (0-3)","R/R"], ascending=[True, False, False])
+    df = pd.DataFrame(rows)
+
+    # Auto sort: Score desc, Status (Prime > Candidate > Fail), R/R desc
+    status_order = {"Prime": 0, "Candidate": 1, "Fail": 2}
+    df["StatusRank"] = df["Status"].map(status_order)
+    df = df.sort_values(by=["Score (0-3)", "StatusRank", "R/R"], ascending=[False, True, False]).drop(columns=["StatusRank"])
+
     st.dataframe(df, use_container_width=True)
+
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download CSV", data=csv, file_name="crystalball_v34_macdv_results.csv", mime="text/csv")
 else:

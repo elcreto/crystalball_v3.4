@@ -1,7 +1,7 @@
-# Crystal Ball v3.4 — MACD / MACD‑V (Fixed Scalars)
+# Crystal Ball v3.4 — MACD / MACD‑V (Fixed + Auto‑Sorted)
 
-Fixes ambiguous Series truth errors by forcing scalar casts with `.iloc[-1]` and `float()`,
-and guarding all comparisons with `np.isnan/np.isfinite`.
+Adds automatic sorting by Score ↓, Status (Prime > Candidate > Fail), and R/R ↓.
+All prior fixes included (scalar casts, NaN guards).
 
 ## Run
 ```
