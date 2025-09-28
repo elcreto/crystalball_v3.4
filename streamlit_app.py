@@ -4,10 +4,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-APP_NAME = "🔮 Crystal Ball v3.4 — MACD‑V Only (Strict TA)"
+APP_NAME = "🔮 Crystal Ball v3.4 — MACD‑V Only + Badges"
 st.set_page_config(page_title=APP_NAME, layout="wide")
 st.title(APP_NAME)
-st.caption("Strict pass/fail on Trend, Volume, R/R. MACD‑V shown for context.")
+st.caption("Strict TA (Trend, Volume, R/R). MACD‑V badge: ✅/⚠️/❌. Shows all names, sorted best→worst.")
 
 DEFAULT_TICKERS = "MSFT,ETN,MDT,IONQ,MU,META,ONTO,NBIS,INTC"
 
@@ -62,6 +62,17 @@ def to_float(x):
     except Exception:
         return float("nan")
 
+def macdv_badge(hist_series):
+    if len(hist_series) < 2:
+        return "⚠️ Weak/Flat", 1
+    last = to_float(hist_series.iloc[-1])
+    prev = to_float(hist_series.iloc[-2])
+    if last > 0 and last > prev:
+        return "✅ Bullish", 2
+    if last < 0:
+        return "❌ Bearish", 0
+    return "⚠️ Weak/Flat", 1
+
 rows, failures = [], []
 
 for t in tickers:
@@ -82,10 +93,8 @@ for t in tickers:
         trend_ok = (not np.isnan(e20) and not np.isnan(e50) and not np.isnan(c_last)) and (e20 > e50) and (c_last > e20)
         vol_ok   = (not np.isnan(v_avg)) and (v_avg > 0) and (v_last >= vol_mult * v_avg)
 
-        # MACD‑V context
         _, _, hist_v = macd_v(close, vol)
-        h_last = to_float(hist_v.iloc[-1])
-        macdv_note = "Bullish" if h_last > 0 else ("Bearish" if h_last < 0 else "Flat")
+        macdv_note, macdv_weight = macdv_badge(hist_v)
 
         # R/R strict (stop=EMA50)
         entry = c_last; stop = e50
@@ -111,19 +120,22 @@ for t in tickers:
             "RROK": bool(rr_ok),
             "Score (0-3)": score,
             "Status": status,
-            "MACD‑V": macdv_note
+            "MACD‑V": macdv_note,
+            "_MACD_Weight": macdv_weight
         })
     except Exception as e:
         failures.append((t, str(e)))
 
 st.subheader("Results")
 if rows:
-    df = pd.DataFrame(rows).sort_values(by=["Score (0-3)", "R/R"], ascending=[False, False])
+    df = pd.DataFrame(rows)
+    # Sort best→worst: Score desc → R/R desc → MACD‑V badge weight desc
+    df = df.sort_values(by=["Score (0-3)", "R/R", "_MACD_Weight"], ascending=[False, False, False]).drop(columns=["_MACD_Weight"])
     st.dataframe(df, use_container_width=True)
     csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Download CSV", data=csv, file_name="crystalball_v34_macdv_only_results.csv", mime="text/csv")
+    st.download_button("⬇️ Download CSV", data=csv, file_name="crystalball_v34_macdv_badges.csv", mime="text/csv")
 else:
-    st.warning("No valid candidates with current criteria. Try different tickers or thresholds.")
+    st.warning("No valid candidates with current criteria.")
 
 if failures:
     with st.expander("Download warnings/errors"):
