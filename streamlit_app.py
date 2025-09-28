@@ -4,10 +4,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-APP_NAME = "🔮 Crystal Ball v3.4 — MACD / MACD‑V Toggle"
+APP_NAME = "🔮 Crystal Ball v3.4 — MACD / MACD‑V (Fixed Scalars)"
 st.set_page_config(page_title=APP_NAME, layout="wide")
 st.title(APP_NAME)
-st.caption("Strict TA filter with switchable MACD mode. Rules: Trend (EMA20>EMA50 & Close>EMA20), Volume ≥ N×20d avg, R/R ≥ threshold. Optional catalyst placeholder.")
+st.caption("Strict TA filter with MACD/MACD‑V toggle. FIX: explicit scalar casts, NaN guards, no ambiguous Series booleans.")
 
 DEFAULT_TICKERS = "MSFT,ETN,MDT,IONQ,MU,META,ONTO,NBIS,INTC"
 
@@ -55,8 +55,8 @@ def fetch(ticker: str, retries: int = 3, sleep: float = 0.6):
                 period="6mo",
                 interval="1d",
                 progress=False,
-                auto_adjust=False,  # explicit
-                threads=False       # sequential to reduce rate limits
+                auto_adjust=False,
+                threads=False
             )
             if df is not None and not df.empty:
                 return df
@@ -65,13 +65,22 @@ def fetch(ticker: str, retries: int = 3, sleep: float = 0.6):
         time.sleep(sleep * (i + 1))
     raise RuntimeError(f"Failed to download {ticker}: {last_err}")
 
+def to_float(x):
+    try:
+        # handle pandas Series / numpy scalars
+        if hasattr(x, "item"):
+            return float(x.item())
+        return float(x)
+    except Exception:
+        return float("nan")
+
 rows = []
 failures = []
 
 for t in tickers:
     try:
         data = fetch(t, retries=max_retries, sleep=sleep_s)
-        if data.empty:
+        if data is None or data.empty:
             failures.append((t, "empty dataframe"))
             continue
 
@@ -82,66 +91,59 @@ for t in tickers:
         ema20 = close.ewm(span=20, adjust=False).mean()
         ema50 = close.ewm(span=50, adjust=False).mean()
 
-        # Volume check
+        # Scalars
+        c_last = to_float(close.iloc[-1])
+        e20    = to_float(ema20.iloc[-1])
+        e50    = to_float(ema50.iloc[-1])
+
         avg_vol = vol.rolling(20).mean()
-        v_last = float(vol.iloc[-1])
-        v_avg = float(avg_vol.iloc[-1]) if avg_vol.iloc[-1] > 0 else float("nan")
-        vol_ok = (not np.isnan(v_avg)) and (v_last >= vol_mult * v_avg)
+        v_last  = to_float(vol.iloc[-1])
+        v_avg   = to_float(avg_vol.iloc[-1])
 
-        # Trend check
-        c_last = float(close.iloc[-1])
-        e20 = float(ema20.iloc[-1])
-        e50 = float(ema50.iloc[-1])
-        trend_ok = (e20 > e50) and (c_last > e20)
+        # Guards
+        vol_ok = (not np.isnan(v_avg)) and (v_avg > 0) and (v_last >= vol_mult * v_avg)
+        trend_ok = (not np.isnan(e20) and not np.isnan(e50) and not np.isnan(c_last)) and (e20 > e50) and (c_last > e20)
 
-        # MACD (for display only; Crystal Ball's decision uses trend/vol/RR; MACD shown in notes)
+        # MACD (context only)
         if macd_mode == "Classic MACD":
             macd_line, sig_line, hist = macd_classic(close)
         else:
             macd_line, sig_line, hist = macd_v(close, vol)
-        m_last, s_last = float(macd_line.iloc[-1]), float(sig_line.iloc[-1])
-        h_last, h_prev = float(hist.iloc[-1]), float(hist.iloc[-2])
-        macd_ok = (m_last > s_last) and (h_last > 0) and (h_last > h_prev)
 
-        # Risk/Reward calc (strict): stop at EMA50, target at >= rr_min * risk distance
+        m_last, s_last = to_float(macd_line.iloc[-1]), to_float(sig_line.iloc[-1])
+        h_last, h_prev = to_float(hist.iloc[-1]), to_float(hist.iloc[-2])
+        macd_ok = (not np.isnan(m_last) and not np.isnan(s_last) and not np.isnan(h_last) and not np.isnan(h_prev))                     and (m_last > s_last) and (h_last > 0) and (h_last > h_prev)
+
+        # R/R strict
         entry = c_last
-        stop = e50
-        if stop <= 0 or entry <= stop or not np.isfinite(stop):
+        stop  = e50
+        if (not np.isfinite(stop)) or (stop <= 0) or (not np.isfinite(entry)) or (entry <= stop):
             rr_ok = False
             target = None
             rr = None
-            risk_dist = None
         else:
             risk_dist = entry - stop
             target = entry + rr_min * risk_dist
-            rr = (target - entry) / (risk_dist if risk_dist else 1.0)
-            rr_ok = rr >= rr_min
-
-        # Catalyst placeholder (Crystal Ball stays TA‑strict; catalyst not counted)
-        catalyst = False
+            rr = (target - entry) / risk_dist if risk_dist else float("nan")
+            rr_ok = np.isfinite(rr) and (rr >= rr_min)
 
         # Score (Crystal Ball strict: 3 checks only — trend, volume, RR)
-        score = int(trend_ok) + int(vol_ok) + int(rr_ok)
-        if score == 3:
-            status = "Prime"
-        elif score == 2:
-            status = "Candidate"
-        else:
-            status = "Fail"
+        score = int(bool(trend_ok)) + int(bool(vol_ok)) + int(bool(rr_ok))
+        status = "Prime" if score == 3 else ("Candidate" if score == 2 else "Fail")
 
         rows.append({
             "Ticker": t,
-            "Entry": round(entry, 2),
-            "Stop": round(stop, 2) if stop else None,
-            "Target": round(target, 2) if target else None,
-            "R/R": round(rr, 2) if rr else None,
-            "TrendOK": trend_ok,
-            "VolOK": vol_ok,
-            "RROK": rr_ok,
+            "Entry": round(entry, 2) if np.isfinite(entry) else None,
+            "Stop": round(stop, 2) if np.isfinite(stop) else None,
+            "Target": round(target, 2) if (target is not None and np.isfinite(target)) else None,
+            "R/R": round(rr, 2) if (rr is not None and np.isfinite(rr)) else None,
+            "TrendOK": bool(trend_ok),
+            "VolOK": bool(vol_ok),
+            "RROK": bool(rr_ok),
             "Score (0-3)": score,
             "Status": status,
             "MACD Mode": macd_mode,
-            "MACD OK": macd_ok
+            "MACD OK": bool(macd_ok)
         })
     except Exception as e:
         failures.append((t, str(e)))
@@ -150,7 +152,6 @@ st.subheader("Results")
 if rows:
     df = pd.DataFrame(rows).sort_values(["Status","Score (0-3)","R/R"], ascending=[True, False, False])
     st.dataframe(df, use_container_width=True)
-    # Export buttons
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download CSV", data=csv, file_name="crystalball_v34_macdv_results.csv", mime="text/csv")
 else:
